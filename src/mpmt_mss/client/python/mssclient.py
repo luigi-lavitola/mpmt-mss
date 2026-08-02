@@ -223,6 +223,8 @@ FEBMGR_METHODS: list[tuple[str, list[ParamSpec], type]] = [
     # Run preparation
     ("prepareForRun",           [("timeout", Optional[float], False), ("channels", Optional[List[int]], False)], dict),
     ("getHVReadyChannels",      [("channels", Optional[List[int]], False)],             dict),
+
+    ("flashFirmware",           [("channel", int, True), ("firmware_path", str, True)], str),
 ]
 
 FPGA_METHODS: list[tuple[str, ParamSpecDef, type]] = [
