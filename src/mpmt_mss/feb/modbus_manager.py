@@ -37,35 +37,45 @@ class ModbusManager:
         self.param = param
         self.client = None
         self.connected = False
-        self.mutex = Lock() 
+        self.mutex = Lock()
 
         logging.getLogger("pymodbus.logging").disabled = True
 
-        if not self.connected:
-            if self.param.mode == 'tcp':
-                self.client = ModbusClient.ModbusTcpClient(self.param.host, port=502, framer=FramerType.SOCKET)
-                if not self.client.connect():
-                    raise RuntimeError(f'E: host not reachable or mbusd not running ({self.param.host})')
-            elif self.param.mode == 'rtu':
-                self.client = ModbusClient.ModbusSerialClient(
-                    self.param.port,
-                    framer=FramerType.RTU,
-                    baudrate=115200,
-                    bytesize=8,
-                    parity="N",
-                    stopbits=1,
-                    timeout=0.1
-                )
-                if not self.client.connect():
-                    raise RuntimeError(f'E: port not available ({self.param.port})')
+        self.connect()
 
-                self.DATATYPE = self.client.DATATYPE
-                self.connected = True
-                #self.probe()
+    def connect(self):
+        """(Re)establishes the modbus connection. A no-op if already
+        connected, so it's safe to call again after close() - used by
+        FEBManager.flashFirmware() to release/reacquire the shared UART
+        around an stm32flash run.
+        """
+        if self.connected:
+            return
+
+        if self.param.mode == 'tcp':
+            self.client = ModbusClient.ModbusTcpClient(self.param.host, port=502, framer=FramerType.SOCKET)
+            if not self.client.connect():
+                raise RuntimeError(f'E: host not reachable or mbusd not running ({self.param.host})')
+        elif self.param.mode == 'rtu':
+            self.client = ModbusClient.ModbusSerialClient(
+                self.param.port,
+                framer=FramerType.RTU,
+                baudrate=115200,
+                bytesize=8,
+                parity="N",
+                stopbits=1,
+                timeout=0.1
+            )
+            if not self.client.connect():
+                raise RuntimeError(f'E: port not available ({self.param.port})')
+
+        self.DATATYPE = self.client.DATATYPE
+        self.connected = True
 
     def close(self):
         if self.connected:
             self.client.close()
+            self.connected = False
 
     @staticmethod
     def check_connect(func):

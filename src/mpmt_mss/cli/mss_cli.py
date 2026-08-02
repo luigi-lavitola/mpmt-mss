@@ -371,6 +371,22 @@ DEFAULT_PARSER.add_argument(
 FPGA_ADDRESS_PARSER = cmd2.Cmd2ArgumentParser()
 FPGA_ADDRESS_PARSER.add_argument('address', type=int, help='FPGA register address')
 
+FLASH_FIRMWARE_PARSER = cmd2.Cmd2ArgumentParser(
+    description="Flash firmware onto one channel's STM32L0 via stm32flash. "
+                 "Powers off every other channel for the duration (all 19 "
+                 "share the same UART) and takes roughly a minute."
+)
+FLASH_FIRMWARE_PARSER.add_argument('channel', type=int, help='channel to flash (1-19)')
+FLASH_FIRMWARE_PARSER.add_argument('firmware', help='path to the .hex firmware file, on the mss host')
+
+# Firmware flashing closes/reopens the modbus connection server-side and can
+# take ~30-90s (stm32flash itself, plus settle time) - long enough that the
+# CLI's normal client (fixed timeout from --timeout, default 10s) would time
+# out mid-flash. A second, longer-timeout client is created just for this
+# one call (see do_flash_firmware) rather than raising the default for
+# every other command.
+_FLASH_FIRMWARE_TIMEOUT_SEC = 180.0
+
 # PMT HV calibration (do_calibrate_pmt), ported from mpmt-board-cli's
 # HvShell.do_calibration (highvoltage/hv.py). Expected setpoints and sampling
 # parameters are unchanged from the original; the "parked/idle" voltage is
@@ -896,6 +912,34 @@ class MSSShell(cmd2.Cmd):
             self.perror(f"Transport error: {exc}")
             return
         self.poutput(f"FPGA registers restored to default values.")
+
+    @cmd2.with_category("RPC commands")
+    @cmd2.with_argparser(FLASH_FIRMWARE_PARSER)
+    def do_flash_firmware(self, args: argparse.Namespace):
+        """Flash firmware onto one channel's STM32L0. No -y shortcut on
+        purpose - a wrong channel/firmware pair here can brick a board, so
+        every call gets an explicit confirmation.
+        """
+        if not self._confirm(
+            f"Flash '{args.firmware}' onto channel {args.channel}? Every other "
+            "channel will be powered off for the duration"
+        ):
+            self.poutput("Aborted.")
+            return
+
+        self.poutput(f"Flashing channel {args.channel} - this can take a minute or two...")
+        flash_client = mssclient.MSSClient(self.url, timeout=_FLASH_FIRMWARE_TIMEOUT_SEC)
+        try:
+            result = flash_client.febmgr.flashFirmware(args.channel, args.firmware)
+        except mssclient.JsonRpcError as exc:
+            self.perror(f"RPC error [{exc.code}] {exc.message} {exc.data or ''}".strip())
+            return
+        except mssclient.JsonRpcTransportError as exc:
+            self.perror(f"Transport error (still waited up to {_FLASH_FIRMWARE_TIMEOUT_SEC:.0f}s): {exc}")
+            return
+        finally:
+            flash_client.close()
+        self.poutput(result)
 
     @cmd2.with_category("RPC commands")
     def do_tr(self, _args):

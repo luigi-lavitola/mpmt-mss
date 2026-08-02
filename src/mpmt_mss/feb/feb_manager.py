@@ -1,4 +1,6 @@
 import inspect
+import os
+import subprocess
 import threading
 import time
 import math
@@ -125,11 +127,27 @@ class FEBManager:
         return result
 
     def close(self):
+        self.pause_probe()
+
+    def pause_probe(self):
+        """Stops the background probe thread. Unlike close(), this is meant
+        to be resumed later with resume_probe() - used by flashFirmware() to
+        keep probe_task from fighting stm32flash for the shared UART.
+        """
         if not self._stop_event.is_set():
             self._stop_event.set()
 
             if self._thread.is_alive():
                 self._thread.join(timeout=5)
+
+    def resume_probe(self):
+        """Restarts the background probe thread after pause_probe(). A
+        Thread object can't be restarted once stopped, so this creates a
+        fresh one.
+        """
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self.probe_task)
+        self._thread.start()
 
     def probe_task(self):
         while True:
@@ -137,7 +155,7 @@ class FEBManager:
                 self.channel(ch).device.probe()
                 if self._stop_event.is_set():
                     return
-                time.sleep(0.250) 
+                time.sleep(0.250)
 
     def channel(self, i: int) -> FEBChannel: 
         if i <= 0 or i>len(self._channels)-1:
@@ -613,3 +631,61 @@ class FEBManager:
             register = 8 + ch
             rates[str(ch+1)] = self.fpga.readRegister(register)
         return rates
+
+    # ------------------------------------------------------------------
+    # Firmware update
+    #
+    # The STM32L0 behind each channel is flashed over the same UART used
+    # for Modbus - there's no separate programming interface. So this has
+    # to: pause probe_task (it also uses that UART in the background),
+    # release the modbus connection, isolate+power only the target channel
+    # (same register 0/1 sequence mpmt-board-cli's reprogram_FEBs.py used),
+    # run stm32flash, then undo all of that - regardless of whether
+    # stm32flash succeeded. If the modbus connection isn't reopened and
+    # probe_task isn't resumed here, mss loses its hardware link entirely
+    # until the service is restarted, so the cleanup runs in `finally`.
+    # ------------------------------------------------------------------
+
+    @rpc_method
+    def flashFirmware(self, channel: int, firmware_path: str) -> str:
+        """Flash firmware onto one channel's STM32L0 via stm32flash.
+
+        Only one channel at a time: all 19 channels share the same UART, so
+        there's no way to flash two channels concurrently even in
+        principle. Every other channel is powered off for the duration.
+        """
+        self._validateChannel(channel)
+        if not os.path.isfile(firmware_path):
+            raise FileNotFoundError(f"firmware file not found: {firmware_path}")
+
+        serial_port = self.modbus.param.port
+
+        self.pause_probe()
+        try:
+            self.modbus.close()
+
+            self.disableAcqAll()
+            self.enableAcqChannel([channel])
+            self.disableAllChannels()
+            self.enableChannel([channel])
+            time.sleep(4)   # settle time, matches reprogram_FEBs.py
+
+            try:
+                result = subprocess.run(
+                    ["stm32flash", "-b", "115200", "-w", firmware_path,
+                     "-e", "255", "-v", serial_port],
+                    capture_output=True, text=True, timeout=120,
+                )
+                output = result.stdout + result.stderr
+                if result.returncode != 0:
+                    return f"FAILED (exit {result.returncode}):\n{output}"
+                return f"OK:\n{output}"
+            except subprocess.TimeoutExpired as e:
+                return f"FAILED: stm32flash timed out after 120s:\n{(e.stdout or '') + (e.stderr or '')}"
+            except FileNotFoundError:
+                return "FAILED: stm32flash executable not found on PATH"
+        finally:
+            self.disableAcqAll()
+            self.disableAllChannels()
+            self.modbus.connect()
+            self.resume_probe()
