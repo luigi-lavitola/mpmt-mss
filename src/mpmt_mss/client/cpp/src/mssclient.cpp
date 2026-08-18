@@ -509,6 +509,22 @@ void FebmgrNamespace::setLEDChannels(int channel, const std::vector<int>& channe
   client_.call("febmgr.setLEDChannels", params);
 }
 
+// ------------------------------------------------------------------
+// Run preparation
+// ------------------------------------------------------------------
+
+json FebmgrNamespace::prepareForRun(std::optional<double> timeout) {
+  json params = json::array();
+  if (timeout.has_value()) params.push_back(*timeout);
+  return client_.call("febmgr.prepareForRun", params);
+}
+
+json FebmgrNamespace::getHVReadyChannels(std::optional<std::vector<int>> channels) {
+  json params = json::array();
+  if (channels.has_value()) params.push_back(*channels);
+  return client_.call("febmgr.getHVReadyChannels", params);
+}
+
 // ---------------------------------------------------------------------------
 // fpga
 // ---------------------------------------------------------------------------

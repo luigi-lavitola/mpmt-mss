@@ -656,3 +656,51 @@ class FEBManager:
             register = 8 + ch
             rates[str(ch+1)] = self.fpga.readRegister(register)
         return rates
+
+    # ------------------------------------------------------------------
+    # Run preparation
+    # ------------------------------------------------------------------
+    def _waitOnline(self, channels: list[int], timeout: float) -> list[int]:
+        deadline = time.time() + timeout
+        while True:
+            online = [ch for ch in channels if self.channel(ch).device.online]
+            if len(online) == len(channels) or time.time() >= deadline:
+                return online
+            time.sleep(0.25)
+
+    @rpc_method
+    def prepareForRun(self, timeout: float = 10.0) -> dict:
+        """Enable configured PMT channels, wait for them to probe online,
+        then enable acquisition and trigger on the ones that made it."""
+        self.fpga.setFifoReset(True)
+
+        channels = self.getDefinedChannels(DeviceType.PMT)
+        self.enableChannel(channels)
+
+        online = self._waitOnline(channels, timeout)
+        offline = [ch for ch in channels if ch not in online]
+
+        self.enableAcqChannel(online)
+        self.enableTriggerChannel(online)
+        self.fpga.setPulserFrequency(1)
+        self.enablePulserChannel(online)
+
+        for ch in online:
+            self.powerPMTOn(ch)
+
+        self.fpga.setFifoReset(False)
+
+        return {"enabled": channels, "online": online, "offline": offline, "hvStarted": online}
+
+    @rpc_method
+    def getHVReadyChannels(self, channels: list[int] = None) -> dict:
+        """Split PMT channels by HV ramp completion (status UP vs still ramping/down/tripped)."""
+        if channels is None:
+            channels = self.getOnlineChannels(DeviceType.PMT)
+
+        ready, notReady = [], []
+        for ch in channels:
+            status = self.channel(ch).device.getPMTStatus()["value"]
+            (ready if status == 0 else notReady).append(ch)
+
+        return {"ready": ready, "notReady": notReady}

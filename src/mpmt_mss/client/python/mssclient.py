@@ -203,7 +203,11 @@ FEBMGR_METHODS: list[tuple[str, list[ParamSpec], type]] = [
     ("setLEDTriggerSource",     [("channel", int, True), ("source", TriggerSource, True)],  type(None)),
     ("setLEDBias",              [("channel", int, True), ("value", bool, True)],        type(None)),
     ("setLEDBiasVoltage",       [("channel", int, True), ("value", float, True)],       type(None)),
-    ("setLEDChannels",          [("channel", int, True), ("channels", List[int], True), ("append", Optional[bool], False)], type(None))
+    ("setLEDChannels",          [("channel", int, True), ("channels", List[int], True), ("append", Optional[bool], False)], type(None)),
+
+    # Run preparation
+    ("prepareForRun",           [("timeout", Optional[float], False)],                  dict),
+    ("getHVReadyChannels",      [("channels", Optional[List[int]], False)],             dict),
 ]
 
 FPGA_METHODS: list[tuple[str, ParamSpecDef, type]] = [

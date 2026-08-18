@@ -191,6 +191,10 @@ class FebmgrNamespace {
   void setLEDChannels(int channel, const std::vector<int>& channels,
                        std::optional<bool> append = std::nullopt);
 
+  // Run preparation
+  nlohmann::json prepareForRun(std::optional<double> timeout = std::nullopt);
+  nlohmann::json getHVReadyChannels(std::optional<std::vector<int>> channels = std::nullopt);
+
  private:
   BaseRpcClient& client_;
 };
