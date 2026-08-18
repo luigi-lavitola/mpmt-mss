@@ -501,15 +501,21 @@ class FEBManager:
 
     @rpc_method
     def getTimeToPeak(self) -> dict[str, int]:
-        """Get all channels time-to-peak."""
+        """Get all channels time-to-peak, in setTimeToPeakChannel()'s units.
+
+        setTimeToPeakChannel divides by 3.7 to fit its 0..0xFFF input into
+        the register's 12 bit field; this used to return the raw encoded
+        value with no inverse conversion, so set(42) read back as 11.
+        """
         ttps = {}
         for ch in range(19):
             register = 28 + ch // 2
             value = self.fpga.readRegister(register)
             if ch % 2 == 1:
-                ttps[str(ch+1)] = value & 0xFFF
+                encoded = value & 0xFFF
             else:
-                ttps[str(ch+1)] = (value >> 12) & 0xFFF
+                encoded = (value >> 12) & 0xFFF
+            ttps[str(ch+1)] = round(encoded * 3.7)
         return ttps
 
 

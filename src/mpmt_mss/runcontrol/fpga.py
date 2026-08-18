@@ -296,10 +296,15 @@ class FPGA:
 
     @rpc_method
     def getDataShifterTimeout(self) -> int:
+        """Ticks, matching setDataShifterTimeout()'s own unit.
+
+        Used to multiply by 8 here as if converting ticks to nanoseconds,
+        while the setter takes and validates a plain tick count (1..512, a
+        9 bit field) - set(15) read back as 120.
+        """
         control = self.readRegister(self.REG_CONTROL)
         encoded = control & self.CTRL_TIMEOUT_MASK
-        ticks = encoded + 1
-        return ticks * 8
+        return encoded + 1
 
     # ------------------------------------------------------------------
     # External trigger window, register 44
@@ -318,8 +323,13 @@ class FPGA:
 
     @rpc_method
     def getTriggerWindow(self) -> int:
-        ticks = self.readRegister(self.REG_TRIGGER_WINDOW)
-        return  ticks * 8
+        """Ticks, matching setTriggerWindow()'s own unit.
+
+        Same bug as getDataShifterTimeout(): multiplied by 8 here while the
+        setter writes the raw tick count straight to the register with no
+        scaling - set(123) read back as 984.
+        """
+        return self.readRegister(self.REG_TRIGGER_WINDOW)
 
     # ------------------------------------------------------------------
     # Monitoring methods
