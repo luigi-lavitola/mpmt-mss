@@ -115,9 +115,19 @@ class PMTChannel(DeviceChannel):
         self.modbus.write_register(address=0x27, value=value, slave=self.address)
 
     @DeviceChannel.track_connection
+    def getPMTLimitVoltage(self) -> int:
+        rr = self.modbus.read_holding_registers(address=0x27, count=1, slave=self.address)
+        return rr.registers[0]
+
+    @DeviceChannel.track_connection
     @DeviceChannel.validate_range(1, 10)
     def setPMTLimitCurrent(self, value: int):
         self.modbus.write_register(address=0x25, value=value, slave=self.address)
+
+    @DeviceChannel.track_connection
+    def getPMTLimitCurrent(self) -> int:
+        rr = self.modbus.read_holding_registers(address=0x25, count=1, slave=self.address)
+        return rr.registers[0]
 
     @DeviceChannel.track_connection
     @DeviceChannel.validate_range(20, 70)
@@ -125,9 +135,19 @@ class PMTChannel(DeviceChannel):
         self.modbus.write_register(address=0x2F, value=value, slave=self.address)
 
     @DeviceChannel.track_connection
+    def getPMTLimitTemperature(self) -> int:
+        rr = self.modbus.read_holding_registers(address=0x2F, count=1, slave=self.address)
+        return rr.registers[0]
+
+    @DeviceChannel.track_connection
     @DeviceChannel.validate_range(1, 1000)
     def setPMTLimitTriptime(self, value: int):
         self.modbus.write_register(address=0x22, value=value, slave=self.address)
+
+    @DeviceChannel.track_connection
+    def getPMTLimitTriptime(self) -> int:
+        rr = self.modbus.read_holding_registers(address=0x22, count=1, slave=self.address)
+        return rr.registers[0]
 
     @DeviceChannel.track_connection
     @DeviceChannel.validate_range(0, 2500)

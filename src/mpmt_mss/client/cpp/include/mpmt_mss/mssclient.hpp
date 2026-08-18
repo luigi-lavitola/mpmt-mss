@@ -151,9 +151,13 @@ class FebmgrNamespace {
   void setPMTRateRampup(int channel, int value);
   void setPMTRateRampdown(int channel, int value);
   void setPMTLimitVoltage(int channel, int value);
+  int getPMTLimitVoltage(int channel);
   void setPMTLimitCurrent(int channel, int value);
+  int getPMTLimitCurrent(int channel);
   void setPMTLimitTemperature(int channel, int value);
+  int getPMTLimitTemperature(int channel);
   void setPMTLimitTriptime(int channel, int value);
+  int getPMTLimitTriptime(int channel);
   void setPMTThreshold(int channel, double value);
   double getPMTThreshold(int channel);
   nlohmann::json getPMTAlarm(int channel);

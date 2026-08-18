@@ -358,16 +358,32 @@ void FebmgrNamespace::setPMTLimitVoltage(int channel, int value) {
   client_.call("febmgr.setPMTLimitVoltage", json::array({channel, value}));
 }
 
+int FebmgrNamespace::getPMTLimitVoltage(int channel) {
+  return client_.call("febmgr.getPMTLimitVoltage", json::array({channel}));
+}
+
 void FebmgrNamespace::setPMTLimitCurrent(int channel, int value) {
   client_.call("febmgr.setPMTLimitCurrent", json::array({channel, value}));
+}
+
+int FebmgrNamespace::getPMTLimitCurrent(int channel) {
+  return client_.call("febmgr.getPMTLimitCurrent", json::array({channel}));
 }
 
 void FebmgrNamespace::setPMTLimitTemperature(int channel, int value) {
   client_.call("febmgr.setPMTLimitTemperature", json::array({channel, value}));
 }
 
+int FebmgrNamespace::getPMTLimitTemperature(int channel) {
+  return client_.call("febmgr.getPMTLimitTemperature", json::array({channel}));
+}
+
 void FebmgrNamespace::setPMTLimitTriptime(int channel, int value) {
   client_.call("febmgr.setPMTLimitTriptime", json::array({channel, value}));
+}
+
+int FebmgrNamespace::getPMTLimitTriptime(int channel) {
+  return client_.call("febmgr.getPMTLimitTriptime", json::array({channel}));
 }
 
 void FebmgrNamespace::setPMTThreshold(int channel, double value) {
