@@ -12,7 +12,11 @@ class FPGA:
         try:
             self.fid = open(uiodev, 'r+b', 0)
         except FileNotFoundError:
-            self.perror("UIO device not found")
+            # perror() isn't a method on this class (nothing here inherits
+            # from cmd2.Cmd, which is where that name comes from elsewhere
+            # in this codebase) - this raised AttributeError instead of
+            # ever printing the intended message.
+            print(f"UIO device not found: {uiodev}", file=sys.stderr)
             sys.exit(-1)
         self.regs = mmap.mmap(self.fid.fileno(), 0x10000)
         self.acqprocess = None
@@ -26,11 +30,16 @@ class FPGA:
     REG_TRIGGER_WINDOW = 44
     REG_TR32_COUNT = 45
     REG_HOUSEKEEPING = 56
+    REG_HV_STATUS = 57
     REG_PULSER_SUBHITS = 60
     REG_FW_DATE_AND_FAULTS = 61
     REG_FW_TIME = 62
     REG_FW_SHA = 63
     REG_FW_VERSION = 104
+    REG_TR32_ERROR_COUNTERS = 105
+    REG_TD_ERROR_COUNTERS = 106
+    REG_TR32_COUNTER_LSB = 107
+    REG_TR32_COUNTER_MSB = 108
 
     # REG_CONTROL bit fields
     CTRL_TIMEOUT_MASK = 0x000001FF
@@ -209,6 +218,28 @@ class FPGA:
             ),
         }
 
+    @rpc_method
+    def getErrorCounters(self) -> dict:
+        tr32 = self.readRegister(self.REG_TR32_ERROR_COUNTERS)
+        td = self.readRegister(self.REG_TD_ERROR_COUNTERS)
+        return {
+            "tr32": {
+                "notReceived": tr32 & 0xFF,
+                "notAligned": (tr32 >> 8) & 0xFF,
+                "arrivedEarly": (tr32 >> 16) & 0xFF,
+            },
+            "tagT": {
+                "notReceived": td & 0xFF,
+                "parityError": (td >> 8) & 0xFF,
+            },
+        }
+
+    @rpc_method
+    def getTr32Counter(self) -> int:
+        lsb = self.readRegister(self.REG_TR32_COUNTER_LSB)
+        msb = self.readRegister(self.REG_TR32_COUNTER_MSB)
+        return (msb << 32) | lsb
+
     # ------------------------------------------------------------------
     # Tr32 and TagT
     # ------------------------------------------------------------------
@@ -231,10 +262,15 @@ class FPGA:
         Pulse the ADC-calibration bit.
 
         Unlike the original CLI, only bit 16 is cleared afterwards; unrelated
-        upper control-register bits are preserved.
+        upper control-register bits are preserved. The original
+        (mpmt-board-cli's rc.py do_calibration) sets then clears the bit
+        with no delay between the two writes at all - this used to call
+        time.sleep(pulseSeconds) here, but neither `time` was imported nor
+        `pulseSeconds` defined anywhere, so this raised NameError on every
+        call. Removed rather than guessed at a delay the reference
+        implementation never had.
         """
         self._setRegisterBits(self.REG_CONTROL, self.CTRL_ADC_CALIBRATION)
-        time.sleep(pulseSeconds)
         self._clearRegisterBits(self.REG_CONTROL, self.CTRL_ADC_CALIBRATION)
 
     # ------------------------------------------------------------------

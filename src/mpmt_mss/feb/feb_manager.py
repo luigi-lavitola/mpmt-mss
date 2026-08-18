@@ -13,7 +13,8 @@ from mpmt_mss.rpc import rpc_service, rpc_method
 FEB_RPC_METHODS: list[str] = [
 
     # PMT
-    "getPMTStatus",
+    # getPMTStatus is not routed generically: FEBManager defines its own
+    # version to keep REG_HV_STATUS in sync as soon as a channel's status is read
     "getPMTVoltage",
     "getPMTVoltageSet",
     "setPMTVoltageSet",
@@ -50,6 +51,7 @@ FEB_RPC_METHODS: list[str] = [
     "powerLEDOn",    
     "powerLEDOff",    
     "getLEDInfo",
+    "getLEDErrorRegisters",
     "setLEDTrigger",
     "getLEDTriggerStatus",
     "setLEDBias",
@@ -68,6 +70,9 @@ FEB_RPC_METHODS: list[str] = [
 
 @rpc_service()
 class FEBManager:
+    # PMTChannel.STATUS_MAP values where HV is above 0V (UP, RUP, RDN, TUP, TDN)
+    PMT_HV_ON_STATUS_VALUES = {0, 2, 3, 4, 5}
+
     def __init__(self, cfg: ModbusConfig, config_from_fpga=True):
         self.modbus = ModbusManager(cfg)
         self.fpga = FPGA('/dev/uio0')
@@ -76,6 +81,8 @@ class FEBManager:
 
         # channels are labeled from J1 to J19 (1...19)
         self._channels = [ FEBChannel(i) for i in range(20) ]
+        self._led_rank = 0
+        self._overcurrentLatch = 0
 
         self._rpc_methods: list[str] = []
         self._generate_routed_methods()        
@@ -148,6 +155,7 @@ class FEBManager:
     def clear(self):
         for i in range(20):
             self.channel(i).detach()
+        self._led_rank = 0
 
     def setup(self, cfg: list[DeviceConfig]):
         self.clear()
@@ -162,7 +170,8 @@ class FEBManager:
         if dtype == DeviceType.PMT:
             device = PMTChannel(self.modbus, channel, address)
         elif dtype == DeviceType.LED:
-            device = LEDChannel(self.modbus, channel, address)
+            device = LEDChannel(self.modbus, channel, address, self._led_rank)
+            self._led_rank += 1
         else:
             raise ValueError(f"Invalid channel type: {dtype}")
         self.channel(channel).attach(device)
@@ -204,6 +213,12 @@ class FEBManager:
         value &= self.UINT32_MASK
         self.fpga.writeRegister(register, value)
 
+    def _updateHVStatusBit(self, channel: int, statusValue: int):
+        if statusValue in self.PMT_HV_ON_STATUS_VALUES:
+            self._setRegisterBits(self.fpga.REG_HV_STATUS, self._channelMask(channel))
+        else:
+            self._clearRegisterBits(self.fpga.REG_HV_STATUS, self._channelMask(channel))
+
 
     @rpc_method
     def call(self, channel: int, method: str, params: dict):
@@ -215,6 +230,12 @@ class FEBManager:
         bound = sig.bind(**params)
 
         return mth(*bound.args, **bound.kwargs)
+
+    @rpc_method
+    def getPMTStatus(self, channel: int) -> dict:
+        status = self.channel(channel).device.getPMTStatus()
+        self._updateHVStatusBit(channel, status["value"])
+        return status
 
     @rpc_method
     def getDefinedChannels(self, dtype: DeviceType = None):
@@ -280,6 +301,7 @@ class FEBManager:
                         "Threshold": PMTreport["threshold"],
                         "Alarm": PMTreport["alarm"]
                     }
+                    self._updateHVStatusBit(ch, PMTreport["status"]["value"])
                 elif self.channel(ch).device.DEVICE_TYPE == "LED":
                     report[str(ch)] = {
                         "type": self.channel(ch).device.DEVICE_TYPE,
@@ -288,6 +310,21 @@ class FEBManager:
             except Exception as e:
                 raise Exception(f"Error reading channel {ch}: {e}")
         return report
+
+    # ------------------------------------------------------------------
+    # Overcurrent latch, register 2 (main power rail, not HV)
+    # bits clear on hardware read, so we OR them into a software latch
+    # ------------------------------------------------------------------
+    @rpc_method
+    def getOvercurrentChannels(self) -> list[int]:
+        """Channels forcibly powered off by an overcurrent on their main power rail."""
+        self._overcurrentLatch |= self.fpga.readRegister(2)
+        return [ch for ch in range(1, 20) if self._overcurrentLatch & self._channelMask(ch)]
+
+    @rpc_method
+    def clearOvercurrentLatch(self):
+        """Acknowledge and clear the software-side overcurrent latch."""
+        self._overcurrentLatch = 0
 
     # ------------------------------------------------------------------
     # Global FEB methods

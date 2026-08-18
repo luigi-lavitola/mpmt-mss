@@ -8,7 +8,7 @@ febmgr = FEBManager(ModbusConfig(mode="rtu", port="/dev/ttyPS1"))
 
 # core objects
 fpga = FPGA('/dev/uio0')
-hk = HouseKeeping()
+hk = HouseKeeping(fpga)
 
 runtime = RPCRuntime()
 

@@ -7,6 +7,7 @@ from mpmt_mss.sensors.tla2024 import TLA2024
 from mpmt_mss.sensors.bme280 import BME280
 from mpmt_mss.sensors.lsm303 import LSM303Accel, LSM303Magnet
 from mpmt_mss.sensors.bm1422 import BM1422
+from mpmt_mss.runcontrol.fpga import FPGA
 
 from mpmt_mss.rpc import rpc_service, rpc_method
 
@@ -95,11 +96,13 @@ OPERATION_MAP = {
 }
 
 I2C_BUS = 1
+FPGA_HOUSEKEEPING_SENSOR_ADDR = 0x76
 
 @rpc_service()
 class HouseKeeping:
 
-    def __init__(self):
+    def __init__(self, fpga: FPGA = None):
+        self.fpga = fpga
         self.sensors = []
         self.readings = {}
         self.discovery()
@@ -140,7 +143,23 @@ class HouseKeeping:
                     d["value"] = round(operation.op(data_conv[operation.index1], data_conv[operation.index2]), 2)
                     self.readings[s.name].append(d)
 
+        self._writeFpgaHousekeeping()
         return self.readings
+
+    def _writeFpgaHousekeeping(self):
+        if self.fpga is None:
+            return
+        readings = self.readings.get(ALIAS_MAP[FPGA_HOUSEKEEPING_SENSOR_ADDR])
+        if not readings:
+            return
+        temperature = next((r["value"] for r in readings if r["label"] == "T"), None)
+        humidity = next((r["value"] for r in readings if r["label"] == "H"), None)
+        if temperature is None or humidity is None:
+            return
+
+        encodedTemperature = max(0, min(0xFFF, round(temperature * 100)))
+        encodedHumidity = max(0, min(0xFFF, round(humidity * 100)))
+        self.fpga.writeRegister(self.fpga.REG_HOUSEKEEPING, (encodedTemperature << 12) | encodedHumidity)
 
 if __name__=="__main__":
     hk = HouseKeeping()

@@ -28,8 +28,9 @@ class LEDChannel(DeviceChannel):
     
     REG_LED_BASE = 85
 
-    def __init__(self, modbus, channel: int, address: int):
+    def __init__(self, modbus, channel: int, address: int, led_rank: int = 0):
         super().__init__(modbus, channel, address)
+        self.led_rank = led_rank
         self.fpga = FPGA('/dev/uio0')
         self.probe()
 
@@ -59,6 +60,17 @@ class LEDChannel(DeviceChannel):
         rr = self.modbus.read_input_registers(address=30001, count=1, slave=self.address).registers
         fwver = f"{rr[0] >> 8}.{(rr[0] & 0xF0) >> 4}.{rr[0] & 0x0F}"
         return {"fwver": fwver}
+
+    @DeviceChannel.track_connection
+    def getLEDErrorRegisters(self) -> dict:
+        rr = self.modbus.read_input_registers(address=30002, count=5, slave=self.address).registers
+        return {
+            "ledCurrentError": rr[0],
+            "ledBiasError": rr[1],
+            "trigSourceError": rr[2],
+            "febMbSlaveError": rr[3],
+            "febMbGlobalError": rr[4],
+        }
 
     @DeviceChannel.track_connection
     @DeviceChannel.validate_range(0, 1)
@@ -91,9 +103,9 @@ class LEDChannel(DeviceChannel):
         rr = self.modbus.write_register(address=40003, value=dac_level, slave=self.address)     
         if not rr.isError():
             # update FPGA register
-            regval = self.fpga.readRegister(self.REG_LED_BASE + self.channel) & 0x7F000
+            regval = self.fpga.readRegister(self.REG_LED_BASE + self.led_rank) & 0x7F000
             regval |= (dac_level & 0xFFF)
-            self.fpga.writeRegister(self.REG_LED_BASE + self.channel, regval)
+            self.fpga.writeRegister(self.REG_LED_BASE + self.led_rank, regval)
 
     @DeviceChannel.track_connection
     def getLEDBiasVoltage(self) -> float:
@@ -122,9 +134,9 @@ class LEDChannel(DeviceChannel):
         rr = self.modbus.write_register(address=40002, value=value, slave=self.address)     
         if not rr.isError():
             # update FPGA register
-            regval = self.fpga.readRegister(self.REG_LED_BASE + self.channel) & 0xFFF
+            regval = self.fpga.readRegister(self.REG_LED_BASE + self.led_rank) & 0xFFF
             regval |= (value & 0x7F) << 12
-            self.fpga.writeRegister(self.REG_LED_BASE + self.channel, regval)
+            self.fpga.writeRegister(self.REG_LED_BASE + self.led_rank, regval)
 
     @DeviceChannel.track_connection
     # return list of enabled led channels
