@@ -150,6 +150,14 @@ json FebmgrNamespace::getStatus(std::optional<DeviceType> channel_type) {
   return client_.call("febmgr.getStatus", OptionalDeviceTypeParams(channel_type));
 }
 
+std::vector<int> FebmgrNamespace::getOvercurrentChannels() {
+  return client_.call("febmgr.getOvercurrentChannels", json::array());
+}
+
+void FebmgrNamespace::clearOvercurrentLatch() {
+  client_.call("febmgr.clearOvercurrentLatch", json::array());
+}
+
 void FebmgrNamespace::enableChannel(const std::vector<int>& channels) {
   client_.call("febmgr.enableChannel", json::array({channels}));
 }
@@ -434,6 +442,10 @@ json FebmgrNamespace::getLEDInfo(int channel) {
   return client_.call("febmgr.getLEDInfo", json::array({channel}));
 }
 
+json FebmgrNamespace::getLEDErrorRegisters(int channel) {
+  return client_.call("febmgr.getLEDErrorRegisters", json::array({channel}));
+}
+
 json FebmgrNamespace::getLEDTriggerStatus(int channel) {
   return client_.call("febmgr.getLEDTriggerStatus", json::array({channel}));
 }
@@ -544,6 +556,14 @@ void FpgaNamespace::setClockCable(int cable) {
 json FpgaNamespace::getClockStatus() { return client_.call("fpga.getClockStatus", json::array()); }
 
 json FpgaNamespace::getTr32Status() { return client_.call("fpga.getTr32Status", json::array()); }
+
+json FpgaNamespace::getErrorCounters() {
+  return client_.call("fpga.getErrorCounters", json::array());
+}
+
+int64_t FpgaNamespace::getTr32Counter() {
+  return client_.call("fpga.getTr32Counter", json::array());
+}
 
 // ------------------------------------------------------------------
 // Tr32 and TagT

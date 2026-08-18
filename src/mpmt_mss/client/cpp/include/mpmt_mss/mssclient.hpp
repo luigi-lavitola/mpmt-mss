@@ -83,6 +83,8 @@ class FebmgrNamespace {
   std::vector<int> getOnlineChannels(std::optional<DeviceType> channel_type = std::nullopt);
   std::vector<int> getOfflineChannels(std::optional<DeviceType> channel_type = std::nullopt);
   nlohmann::json getStatus(std::optional<DeviceType> channel_type = std::nullopt);
+  std::vector<int> getOvercurrentChannels();
+  void clearOvercurrentLatch();
   void enableChannel(const std::vector<int>& channels);
   void disableChannel(const std::vector<int>& channels);
   void enableAllChannels();
@@ -171,6 +173,7 @@ class FebmgrNamespace {
 
   nlohmann::json getLEDStatus(int channel);
   nlohmann::json getLEDInfo(int channel);
+  nlohmann::json getLEDErrorRegisters(int channel);
   nlohmann::json getLEDTriggerStatus(int channel);
   nlohmann::json getLEDBiasStatus(int channel);
   double getLEDBiasVoltage(int channel);
@@ -210,6 +213,8 @@ class FpgaNamespace {
   void setClockCable(int cable);
   nlohmann::json getClockStatus();
   nlohmann::json getTr32Status();
+  nlohmann::json getErrorCounters();
+  int64_t getTr32Counter();
 
   // Tr32 and TagT
   void enableTr32Channel();
