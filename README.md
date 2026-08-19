@@ -83,7 +83,4 @@ example).
 - FPGA registers 64-84 and 90-102 (LED pulser subsystem: per-LED burst
   start time, pulse interval, pulse count, start-key in/out, LED-FEB
   status/clear/address) are not implemented — semantics not fully
-  understood yet. Per the register map, only LED slot 0 (registers 65,
-  70, 75, 80) is wired to a physical port ("connected to port 1"); slots
-  1-4 are unconnected on this board.
-- FPGA register 6 ("RunC_val_Tag0"): unused, meaning not yet clarified.
+  understood yet. 

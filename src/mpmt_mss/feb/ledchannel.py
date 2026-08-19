@@ -28,6 +28,24 @@ class LEDChannel(DeviceChannel):
     
     REG_LED_BASE = 85
 
+    # burst/pulser registers, one slot per led_rank (0..4)
+    REG_BURST_START_S_BASE = 65
+    REG_BURST_START_4NS_BASE = 70
+    REG_BURST_INTERVAL_4NS_BASE = 75
+    REG_BURST_COUNT_BASE = 80
+    REG_BURST_KEY_OUT_BASE = 90
+    REG_BURST_KEY_IN_BASE = 95
+    REG_BURST_STATUS = 100    # shared, 2 bits per led_rank
+    REG_BURST_CLEAR = 101     # shared, 2 bits per led_rank
+
+    # meaning of bits 1/2 inferred from x_feb/led_feb_burst.py; 3 unconfirmed
+    BURST_STATUS_MAP = {
+        0: "IDLE",
+        1: "WAITING_OR_RUNNING",
+        2: "ERROR",
+        3: "undef",
+    }
+
     def __init__(self, modbus, channel: int, address: int, led_rank: int = 0):
         super().__init__(modbus, channel, address)
         self.led_rank = led_rank
@@ -71,6 +89,42 @@ class LEDChannel(DeviceChannel):
             "febMbSlaveError": rr[3],
             "febMbGlobalError": rr[4],
         }
+
+    def getLEDBurstConfig(self) -> dict:
+        return {
+            "startTimeS": self.fpga.readRegister(self.REG_BURST_START_S_BASE + self.led_rank),
+            "startTime4ns": self.fpga.readRegister(self.REG_BURST_START_4NS_BASE + self.led_rank),
+            "flashInterval4ns": self.fpga.readRegister(self.REG_BURST_INTERVAL_4NS_BASE + self.led_rank),
+            "flashCount": self.fpga.readRegister(self.REG_BURST_COUNT_BASE + self.led_rank),
+        }
+
+    def setLEDBurstConfig(self, startTimeS: int, startTime4ns: int, flashInterval4ns: int, flashCount: int):
+        self.fpga.writeRegister(self.REG_BURST_START_S_BASE + self.led_rank, startTimeS)
+        self.fpga.writeRegister(self.REG_BURST_START_4NS_BASE + self.led_rank, startTime4ns)
+        self.fpga.writeRegister(self.REG_BURST_INTERVAL_4NS_BASE + self.led_rank, flashInterval4ns)
+        self.fpga.writeRegister(self.REG_BURST_COUNT_BASE + self.led_rank, flashCount)
+
+    # secondsFromNow is added to register 45 ("now"), not wall-clock seconds -
+    # see the mpmt-mss-led-pulser-registers memory for why
+    def setLEDBurstConfigIn(self, secondsFromNow: int, sub4ns: int, flashInterval4ns: int, flashCount: int):
+        now = self.fpga.readRegister(self.fpga.REG_TR32_COUNT)
+        self.setLEDBurstConfig(now + secondsFromNow, sub4ns, flashInterval4ns, flashCount)
+
+    def getLEDBurstKey(self) -> int:
+        return self.fpga.readRegister(self.REG_BURST_KEY_OUT_BASE + self.led_rank)
+
+    def setLEDBurstKey(self, key: int):
+        self.fpga.writeRegister(self.REG_BURST_KEY_IN_BASE + self.led_rank, key)
+
+    def startLEDBurst(self):
+        self.setLEDBurstKey(self.getLEDBurstKey())
+
+    def getLEDBurstStatus(self) -> dict:
+        value = (self.fpga.readRegister(self.REG_BURST_STATUS) >> (2 * self.led_rank)) & 0x3
+        return {"value": value, "string": self.BURST_STATUS_MAP.get(value, "undef")}
+
+    def clearLEDBurstStatus(self):
+        self.fpga.writeRegister(self.REG_BURST_CLEAR, 0x2 << (2 * self.led_rank))
 
     @DeviceChannel.track_connection
     @DeviceChannel.validate_range(0, 1)
