@@ -314,6 +314,22 @@ void FebmgrNamespace::setPMTModbusAddressForced(int addr) {
   client_.call("febmgr.setPMTModbusAddressForced", json::array({addr}));
 }
 
+void FebmgrNamespace::setLEDModbusAddressForced(int addr) {
+  client_.call("febmgr.setLEDModbusAddressForced", json::array({addr}));
+}
+
+json FebmgrNamespace::alignModbusAddresses(std::optional<std::vector<int>> channels,
+                                            std::optional<double> timeout,
+                                            std::optional<double> poll_interval,
+                                            std::optional<bool> reconfigure) {
+  json params = json::array();
+  if (channels.has_value()) params.push_back(*channels);
+  if (timeout.has_value()) params.push_back(*timeout);
+  if (poll_interval.has_value()) params.push_back(*poll_interval);
+  if (reconfigure.has_value()) params.push_back(*reconfigure);
+  return client_.call("febmgr.alignModbusAddresses", params);
+}
+
 json FebmgrNamespace::getPMTStatus(int channel) {
   return client_.call("febmgr.getPMTStatus", json::array({channel}));
 }
@@ -460,6 +476,42 @@ json FebmgrNamespace::getLEDInfo(int channel) {
 
 json FebmgrNamespace::getLEDErrorRegisters(int channel) {
   return client_.call("febmgr.getLEDErrorRegisters", json::array({channel}));
+}
+
+json FebmgrNamespace::getLEDBurstConfig(int channel) {
+  return client_.call("febmgr.getLEDBurstConfig", json::array({channel}));
+}
+
+void FebmgrNamespace::setLEDBurstConfig(int channel, int64_t startTimeS, int64_t startTime4ns,
+                                         int64_t flashInterval4ns, int64_t flashCount) {
+  client_.call("febmgr.setLEDBurstConfig",
+               json::array({channel, startTimeS, startTime4ns, flashInterval4ns, flashCount}));
+}
+
+void FebmgrNamespace::setLEDBurstConfigIn(int channel, int64_t secondsFromNow, int64_t sub4ns,
+                                           int64_t flashInterval4ns, int64_t flashCount) {
+  client_.call("febmgr.setLEDBurstConfigIn",
+               json::array({channel, secondsFromNow, sub4ns, flashInterval4ns, flashCount}));
+}
+
+int64_t FebmgrNamespace::getLEDBurstKey(int channel) {
+  return client_.call("febmgr.getLEDBurstKey", json::array({channel}));
+}
+
+void FebmgrNamespace::setLEDBurstKey(int channel, int64_t key) {
+  client_.call("febmgr.setLEDBurstKey", json::array({channel, key}));
+}
+
+void FebmgrNamespace::startLEDBurst(int channel) {
+  client_.call("febmgr.startLEDBurst", json::array({channel}));
+}
+
+json FebmgrNamespace::getLEDBurstStatus(int channel) {
+  return client_.call("febmgr.getLEDBurstStatus", json::array({channel}));
+}
+
+void FebmgrNamespace::clearLEDBurstStatus(int channel) {
+  client_.call("febmgr.clearLEDBurstStatus", json::array({channel}));
 }
 
 json FebmgrNamespace::getLEDTriggerStatus(int channel) {

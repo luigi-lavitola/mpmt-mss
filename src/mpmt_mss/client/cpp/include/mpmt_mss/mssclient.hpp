@@ -139,6 +139,13 @@ class FebmgrNamespace {
   void powerPMTOffAll();
   void setPMTThresholdAll(double value);
   void setPMTModbusAddressForced(int addr);
+  void setLEDModbusAddressForced(int addr);
+
+  // Modbus address alignment
+  nlohmann::json alignModbusAddresses(std::optional<std::vector<int>> channels = std::nullopt,
+                                       std::optional<double> timeout = std::nullopt,
+                                       std::optional<double> poll_interval = std::nullopt,
+                                       std::optional<bool> reconfigure = std::nullopt);
 
   nlohmann::json getPMTStatus(int channel);
   double getPMTVoltage(int channel);
@@ -178,6 +185,16 @@ class FebmgrNamespace {
   nlohmann::json getLEDStatus(int channel);
   nlohmann::json getLEDInfo(int channel);
   nlohmann::json getLEDErrorRegisters(int channel);
+  nlohmann::json getLEDBurstConfig(int channel);
+  void setLEDBurstConfig(int channel, int64_t startTimeS, int64_t startTime4ns,
+                          int64_t flashInterval4ns, int64_t flashCount);
+  void setLEDBurstConfigIn(int channel, int64_t secondsFromNow, int64_t sub4ns,
+                            int64_t flashInterval4ns, int64_t flashCount);
+  int64_t getLEDBurstKey(int channel);
+  void setLEDBurstKey(int channel, int64_t key);
+  void startLEDBurst(int channel);
+  nlohmann::json getLEDBurstStatus(int channel);
+  void clearLEDBurstStatus(int channel);
   nlohmann::json getLEDTriggerStatus(int channel);
   nlohmann::json getLEDBiasStatus(int channel);
   double getLEDBiasVoltage(int channel);

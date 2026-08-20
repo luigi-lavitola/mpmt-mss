@@ -339,6 +339,74 @@ class FEBManager:
         self._overcurrentLatch = 0
 
     # ------------------------------------------------------------------
+    # Modbus address alignment: power one board at a time and force it onto
+    # the address dictated by its FPGA wiring (register 103), so this
+    # doesn't have to be scripted externally.
+    # ------------------------------------------------------------------
+    def _alignChannel(self, channel: int, dtype: DeviceType, target: int,
+                       timeout: float, poll_interval: float):
+        """Power just this channel, retry the forced-address broadcast until
+        a readback at the target address succeeds or timeout elapses."""
+        self.enableChannel([channel])
+        deadline = time.time() + timeout
+        last_err = None
+        try:
+            while time.time() < deadline:
+                try:
+                    if dtype == DeviceType.PMT:
+                        self.setPMTModbusAddressForced(target)
+                        self.modbus.read_holding_registers(address=6, count=1, slave=target)
+                    else:
+                        self.setLEDModbusAddressForced(target)
+                        self.modbus.read_input_registers(address=30001, count=1, slave=target)
+                    return True, None
+                except Exception as e:
+                    last_err = e
+                    time.sleep(poll_interval)
+            return False, str(last_err)
+        finally:
+            self.disableChannel([channel])
+
+    @rpc_method
+    def alignModbusAddresses(self, channels: list[int] = None, timeout: float = 5.0,
+                              poll_interval: float = 0.25, reconfigure: bool = True) -> dict:
+        """Assign Modbus addresses without external scripting: for each
+        channel, power only that board, broadcast its target address (PMT:
+        channel, LED: channel+20, from the register 103 wiring), and confirm
+        it by reading back at that address before moving on to the next
+        channel - retrying on the broadcast+readback until timeout if the
+        board isn't up yet.
+
+        All other channels are powered off for the duration (their online
+        status will drop and recover on its own via probe_task). Channels
+        that fail are reported in "failed" and left untouched; on success
+        "reconfigure" (default True) re-attaches channels so they're usable
+        immediately, without waiting for a restart.
+        """
+        pmtmask = self.fpga.readRegister(103)
+        if channels is None:
+            channels = list(range(1, 20))
+
+        self.disableAllChannels()
+        ok, failed = [], {}
+
+        for ch in channels:
+            dtype = DeviceType.PMT if (pmtmask & self._channelMask(ch)) else DeviceType.LED
+            target = ch if dtype == DeviceType.PMT else ch + 20
+            success, err = self._alignChannel(ch, dtype, target, timeout, poll_interval)
+            if success:
+                ok.append({"channel": ch, "type": dtype, "address": target})
+            else:
+                failed[str(ch)] = err
+
+        if reconfigure and ok:
+            self.clear()
+            for entry in ok:
+                self.configure(entry["type"], entry["channel"], entry["address"])
+
+        return {"ok": ok, "failed": failed}
+
+    # ------------------------------------------------------------------
     # Global FEB methods
     # ------------------------------------------------------------------
 
@@ -374,6 +442,13 @@ class FEBManager:
         self.modbus.write_register(address=0x00, value=addr, slave=0, no_response_expected=True)
         time.sleep(0.05) # critical since there is no response
 
+    @rpc_method
+    def setLEDModbusAddressForced(self, addr: int):
+        """Force modbus address to all LED channels turned on"""
+        self._validateRange(addr, 21, 39, "address")
+        self.modbus.write_register(address=0x40006, value=addr, slave=0, no_response_expected=True)
+        time.sleep(0.05) # critical since there is no response
+
     # ------------------------------------------------------------------
     # Turn on/off channels, register 1
     # ------------------------------------------------------------------
@@ -384,11 +459,13 @@ class FEBManager:
         for ch in channels:
             self._setRegisterBits(1, self._channelMask(ch))
 
+    #for safety we also disable the acquisition to prevent boot mode at startup.
     @rpc_method
     def disableChannel(self, channels: list[int]):
         """Turn off channels using a list"""
         for ch in channels:
             self._clearRegisterBits(1, self._channelMask(ch))
+            self._clearRegisterBits(0, self._channelMask(ch))
 
     @rpc_method
     def enableAllChannels(self):
@@ -399,17 +476,18 @@ class FEBManager:
     def disableAllChannels(self):
         """Turn off all channels"""
         self.fpga.writeRegister(1, 0)
+        self.fpga.writeRegister(0, 0)
 
     @rpc_method
     def enableChannelsByMask(self, mask: int):
-        """Turn off multiple channels using a bitmask"""
+        """Turn on multiple channels using a bitmask"""
         for ch in range(19):
             if mask & (1 << ch):
                 self.enableChannel([ch+1])
 
     @rpc_method
     def disableChannelsByMask(self, mask: int):
-        """Turn on multiple channels using a bitmask"""
+        """Turn off multiple channels using a bitmask"""
         for ch in range(19):
             if mask & (1 << ch):
                 self.disableChannel([ch+1])
