@@ -99,14 +99,8 @@ class FEBManager:
         self._rpc_methods: list[str] = []
         self._generate_routed_methods()        
 
-        # register 103 bit (x) is '1' for PMT channel, '0' for LED channel
         if config_from_fpga:
-            pmtmask = self.fpga.readRegister(103)
-            for ch in range(19):       # 0...18
-                if pmtmask & 1<<ch:
-                    self.configure(DeviceType.PMT, ch+1, ch+1)
-                else:
-                    self.configure(DeviceType.LED, ch+1, ch+21)
+            self._configureFromFpga()
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self.probe_task)
@@ -165,9 +159,18 @@ class FEBManager:
         return self._channels[i]
 
     def clear(self):
-        for i in range(20):
+        for i in range(1, 20):
             self.channel(i).detach()
         self._led_rank = 0
+
+    # register 103 bit (x) is '1' for PMT channel, '0' for LED channel
+    def _configureFromFpga(self):
+        pmtmask = self.fpga.readRegister(103)
+        for ch in range(19):       # 0...18
+            if pmtmask & 1<<ch:
+                self.configure(DeviceType.PMT, ch+1, ch+1)
+            else:
+                self.configure(DeviceType.LED, ch+1, ch+21)
 
     def setup(self, cfg: list[DeviceConfig]):
         self.clear()
@@ -379,9 +382,10 @@ class FEBManager:
 
         All other channels are powered off for the duration (their online
         status will drop and recover on its own via probe_task). Channels
-        that fail are reported in "failed" and left untouched; on success
-        "reconfigure" (default True) re-attaches channels so they're usable
-        immediately, without waiting for a restart.
+        that fail are reported in "failed" and left untouched; if at least
+        one channel succeeded, "reconfigure" (default True) re-attaches the
+        whole board from register 103 (not just the channels just aligned),
+        so it's usable immediately without waiting for a restart.
         """
         pmtmask = self.fpga.readRegister(103)
         if channels is None:
@@ -400,9 +404,13 @@ class FEBManager:
                 failed[str(ch)] = err
 
         if reconfigure and ok:
+            # Full repopulation from register 103, not just the channels just
+            # aligned: _led_rank has to be recomputed for the whole board in
+            # ascending channel order to stay in sync with the FPGA's own
+            # per-LED-FEB slot numbering, and channels outside this call's
+            # scope must not lose their existing configuration.
             self.clear()
-            for entry in ok:
-                self.configure(entry["type"], entry["channel"], entry["address"])
+            self._configureFromFpga()
 
         return {"ok": ok, "failed": failed}
 
@@ -446,7 +454,7 @@ class FEBManager:
     def setLEDModbusAddressForced(self, addr: int):
         """Force modbus address to all LED channels turned on"""
         self._validateRange(addr, 21, 39, "address")
-        self.modbus.write_register(address=0x40006, value=addr, slave=0, no_response_expected=True)
+        self.modbus.write_register(address=40006, value=addr, slave=0, no_response_expected=True)
         time.sleep(0.05) # critical since there is no response
 
     # ------------------------------------------------------------------

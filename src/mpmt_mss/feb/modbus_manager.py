@@ -59,9 +59,9 @@ class ModbusManager:
                 if not self.client.connect():
                     raise RuntimeError(f'E: port not available ({self.param.port})')
 
-                self.DATATYPE = self.client.DATATYPE
-                self.connected = True
-                #self.probe()
+            self.DATATYPE = self.client.DATATYPE
+            self.connected = True
+            #self.probe()
 
     def close(self):
         if self.connected:

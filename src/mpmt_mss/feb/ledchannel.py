@@ -240,5 +240,5 @@ class LEDChannel(DeviceChannel):
     
     @DeviceChannel.validate_range(20, 40)
     def setLEDModbusAddress(self, addr: int):
-        self.modbus.write_register(address=0x40006, value=addr, slave=self.address)
+        self.modbus.write_register(address=40006, value=addr, slave=self.address)
 
