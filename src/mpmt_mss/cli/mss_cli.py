@@ -362,6 +362,33 @@ CALIBRATE_PMT_PARSER.add_argument(
     "-y", "--yes", action="store_true", help="skip the confirmation prompt"
 )
 
+ALIGN_PARSER = cmd2.Cmd2ArgumentParser(
+    description="Align Modbus addresses: power one board at a time and force it "
+                 "onto the address its FPGA wiring (register 103) expects. Same "
+                 "febmgr.alignModbusAddresses() RPC as always, just driven one "
+                 "channel per request from here instead of one big call for "
+                 "every channel - so you see OK/FAILED printed live as each "
+                 "channel finishes, instead of the whole shell blocking silently "
+                 "on a single request that can easily outlast any reasonable "
+                 "HTTP timeout."
+)
+ALIGN_PARSER.add_argument(
+    "--channels", type=int, nargs="+", default=None, metavar="CH",
+    help="channels to align (default: all 1..19)",
+)
+ALIGN_PARSER.add_argument(
+    "--align_timeout", type=float, default=5.0, metavar="SECONDS",
+    help="per-channel broadcast+readback retry budget, passed to "
+         "alignModbusAddresses (default: %(default)s)",
+)
+ALIGN_PARSER.add_argument(
+    "--poll_interval", type=float, default=0.25, metavar="SECONDS",
+    help="delay between retries within one channel (default: %(default)s)",
+)
+ALIGN_PARSER.add_argument(
+    "-y", "--yes", action="store_true", help="skip the confirmation prompt"
+)
+
 DEFAULT_PARSER = cmd2.Cmd2ArgumentParser(
     description="Set all the FPGA register to their default values."
 )
@@ -797,6 +824,73 @@ class MSSShell(cmd2.Cmd):
         ]
         headers, table_rows = _dicts_to_table(rows)
         self.poutput(_format_table(headers, table_rows))
+
+    @cmd2.with_category("RPC commands")
+    @cmd2.with_argparser(ALIGN_PARSER)
+    def do_align(self, args: argparse.Namespace):
+        """Align Modbus addresses one channel at a time, printing OK/FAILED
+        live as each one finishes (see ALIGN_PARSER description above for
+        why this drives alignModbusAddresses() one channel per request
+        instead of a single call for the whole board).
+        """
+        channels = sorted(args.channels) if args.channels else list(range(1, 20))
+
+        if args.align_timeout >= self.timeout - 1:
+            self.perror(
+                f"Warning: --align_timeout {args.align_timeout}s leaves less than 1s of "
+                f"headroom under this shell's own HTTP timeout ({self.timeout}s) - a channel "
+                f"that genuinely needs the full retry budget could time out the HTTP request "
+                f"itself instead of coming back as a clean FAILED. Reconnect with a bigger "
+                f"--timeout (see 'help connect') or lower --align_timeout."
+            )
+
+        if not args.yes and not self._confirm(
+            f"Align {len(channels)} channel(s) ({', '.join(str(c) for c in channels)})? "
+            "Every other channel is powered off while each one's turn comes up, one at a time."
+        ):
+            self.poutput("Aborted.")
+            return
+
+        ok_channels, failed_channels = [], {}
+        for ch in channels:
+            self.poutput(f"channel {ch}: aligning...")
+            try:
+                result = self.client.febmgr.alignModbusAddresses(
+                    channels=[ch], timeout=args.align_timeout, poll_interval=args.poll_interval,
+                    reconfigure=False,
+                )
+            except mssclient.JsonRpcError as exc:
+                self.perror(f"  channel {ch}: RPC error [{exc.code}] {exc.message} {exc.data or ''}".strip())
+                failed_channels[str(ch)] = f"RPC error: {exc.message}"
+                continue
+            except mssclient.JsonRpcTransportError as exc:
+                self.perror(f"  channel {ch}: transport error: {exc}")
+                failed_channels[str(ch)] = f"transport error: {exc}"
+                continue
+
+            if result["ok"]:
+                entry = result["ok"][0]
+                self.poutput(f"  channel {ch} -> OK (address {entry['address']}, {entry['type']})")
+                ok_channels.append(ch)
+            else:
+                err = result["failed"].get(str(ch), "unknown error")
+                self.perror(f"  channel {ch} -> FAILED: {err}")
+                failed_channels[str(ch)] = err
+
+        if ok_channels:
+            self.poutput(f"Reconfiguring from register 103 ({len(ok_channels)} channel(s) aligned)...")
+            try:
+                self.client.febmgr.reconfigureFromFpga()
+            except (mssclient.JsonRpcError, mssclient.JsonRpcTransportError) as exc:
+                self.perror(f"reconfigureFromFpga failed: {exc}")
+
+        self.poutput("--- align summary ---")
+        rows = [{"channel": ch, "result": "OK"} for ch in ok_channels]
+        rows += [{"channel": int(ch), "result": f"FAILED: {err}"} for ch, err in failed_channels.items()]
+        rows.sort(key=lambda r: r["channel"])
+        headers, table_rows = _dicts_to_table(rows)
+        self.poutput(_format_table(headers, table_rows))
+        self._show_online()
 
     def _calibrate_pmt_channel(self, channel: int) -> tuple:
         """Runs the calibration ramp for one PMT channel and writes the

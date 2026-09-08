@@ -1,4 +1,5 @@
 import inspect
+import logging
 import threading
 import time
 import math
@@ -9,6 +10,8 @@ from mpmt_mss.feb.pmtchannel import PMTChannel
 from mpmt_mss.feb.ledchannel import LEDChannel
 from mpmt_mss.runcontrol.fpga import FPGA
 from mpmt_mss.rpc import rpc_service, rpc_method
+
+log = logging.getLogger(__name__)
 
 FEB_RPC_METHODS: list[str] = [
 
@@ -394,25 +397,44 @@ class FEBManager:
         self.disableAllChannels()
         ok, failed = [], {}
 
+        log.info("alignModbusAddresses: starting on %d channel(s): %s", len(channels), channels)
         for ch in channels:
             dtype = DeviceType.PMT if (pmtmask & self._channelMask(ch)) else DeviceType.LED
             target = ch if dtype == DeviceType.PMT else ch + 20
+            log.info("alignModbusAddresses: channel %s (%s) -> address %s...", ch, dtype, target)
             success, err = self._alignChannel(ch, dtype, target, timeout, poll_interval)
             if success:
+                log.info("alignModbusAddresses: channel %s -> OK (address %s)", ch, target)
                 ok.append({"channel": ch, "type": dtype, "address": target})
             else:
+                log.warning("alignModbusAddresses: channel %s -> FAILED: %s", ch, err)
                 failed[str(ch)] = err
+        log.info(
+            "alignModbusAddresses: done - %d ok, %d failed%s",
+            len(ok), len(failed), f": {list(failed.keys())}" if failed else "",
+        )
 
         if reconfigure and ok:
-            # Full repopulation from register 103, not just the channels just
-            # aligned: _led_rank has to be recomputed for the whole board in
-            # ascending channel order to stay in sync with the FPGA's own
-            # per-LED-FEB slot numbering, and channels outside this call's
-            # scope must not lose their existing configuration.
-            self.clear()
-            self._configureFromFpga()
+            self.reconfigureFromFpga()
 
         return {"ok": ok, "failed": failed}
+
+    @rpc_method
+    def reconfigureFromFpga(self):
+        """Re-attaches every channel (1-19) from register 103's PMT/LED
+        wiring mask, discarding the current in-memory channel objects and
+        recreating them. Pure software, no Modbus/hardware I/O -- exposed
+        separately so a caller that aligned channels one at a time (e.g. to
+        show live per-channel progress instead of one big blocking call)
+        can still get the same single full repopulation that
+        alignModbusAddresses(reconfigure=True) would have done in one shot:
+        _led_rank has to be recomputed for the whole board in ascending
+        channel order to stay in sync with the FPGA's own per-LED-FEB slot
+        numbering, so calling this once at the end (rather than after each
+        channel) is both correct and cheaper.
+        """
+        self.clear()
+        self._configureFromFpga()
 
     # ------------------------------------------------------------------
     # Global FEB methods

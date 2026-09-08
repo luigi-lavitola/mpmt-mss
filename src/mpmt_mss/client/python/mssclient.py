@@ -153,6 +153,7 @@ FEBMGR_METHODS: list[tuple[str, list[ParamSpec], type]] = [
     ("setPMTModbusAddressForced", [("addr", int, True)],                                type(None)),
     ("setLEDModbusAddressForced", [("addr", int, True)],                                type(None)),
     ("alignModbusAddresses",    [("channels", Optional[List[int]], False), ("timeout", Optional[float], False), ("poll_interval", Optional[float], False), ("reconfigure", Optional[bool], False)], dict),
+    ("reconfigureFromFpga",     [],                                                     type(None)),
     ("getRateChannel",          [("channel", int, True)],                               int),
     ("getRateAll",              [],                                                     dict[str, int]),
 
