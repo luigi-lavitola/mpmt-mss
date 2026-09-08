@@ -150,10 +150,21 @@ class FEBManager:
     def probe_task(self):
         while True:
             for ch in self.getDefinedChannels():
-                self.channel(ch).device.probe()
+                try:
+                    self.channel(ch).device.probe()
+                except Exception:
+                    # An unhandled exception here would silently kill this
+                    # thread forever (Python threads don't propagate to the
+                    # main one) - every channel's online status would then
+                    # freeze at whatever it last was, recoverable only by
+                    # restarting the whole process. One real way this fires:
+                    # reconfigureFromFpga()'s clear() detaches channels (sets
+                    # .device to None) with no lock against this loop, so a
+                    # probe here can race a channel mid-detach.
+                    log.exception("probe_task: channel %s probe failed, skipping", ch)
                 if self._stop_event.is_set():
                     return
-                time.sleep(0.250) 
+                time.sleep(0.250)
 
     def channel(self, i: int) -> FEBChannel: 
         if i <= 0 or i>len(self._channels)-1:
