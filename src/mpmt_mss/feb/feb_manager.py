@@ -153,14 +153,7 @@ class FEBManager:
                 try:
                     self.channel(ch).device.probe()
                 except Exception:
-                    # An unhandled exception here would silently kill this
-                    # thread forever (Python threads don't propagate to the
-                    # main one) - every channel's online status would then
-                    # freeze at whatever it last was, recoverable only by
-                    # restarting the whole process. One real way this fires:
-                    # reconfigureFromFpga()'s clear() detaches channels (sets
-                    # .device to None) with no lock against this loop, so a
-                    # probe here can race a channel mid-detach.
+                    # unhandled here silently kills this thread for good - see clear()
                     log.exception("probe_task: channel %s probe failed, skipping", ch)
                 if self._stop_event.is_set():
                     return
@@ -173,6 +166,7 @@ class FEBManager:
         return self._channels[i]
 
     def clear(self):
+        # no lock against probe_task - it can catch a channel mid-detach
         for i in range(1, 20):
             self.channel(i).detach()
         self._led_rank = 0
@@ -433,16 +427,10 @@ class FEBManager:
     @rpc_method
     def reconfigureFromFpga(self):
         """Re-attaches every channel (1-19) from register 103's PMT/LED
-        wiring mask, discarding the current in-memory channel objects and
-        recreating them. Pure software, no Modbus/hardware I/O -- exposed
-        separately so a caller that aligned channels one at a time (e.g. to
-        show live per-channel progress instead of one big blocking call)
-        can still get the same single full repopulation that
-        alignModbusAddresses(reconfigure=True) would have done in one shot:
-        _led_rank has to be recomputed for the whole board in ascending
-        channel order to stay in sync with the FPGA's own per-LED-FEB slot
-        numbering, so calling this once at the end (rather than after each
-        channel) is both correct and cheaper.
+        wiring mask - pure software, no Modbus/hardware I/O. Separate from
+        alignModbusAddresses so it can be called once after aligning
+        channels individually, since _led_rank must be recomputed for the
+        whole board.
         """
         self.clear()
         self._configureFromFpga()

@@ -74,13 +74,7 @@ class ModbusManager:
         def wrapper(self, *args, **kwargs):
             if not self.connected:
                 raise RuntimeError("Modbus not connected")
-            # self.connected is only ever set once, at __init__ - it does not
-            # reflect the client's real state. pymodbus itself closes the
-            # underlying serial connection after exhausting its retries on a
-            # failed transaction ("No response received... CLOSING
-            # CONNECTION"); without this check every call after that keeps
-            # going through this decorator, silently reusing a closed client
-            # forever, until the whole process is restarted.
+            # self.connected never updates after __init__ - check the real state
             if not self.client.is_socket_open():
                 log.warning("Modbus connection was closed, reconnecting...")
                 if not self.client.connect():
