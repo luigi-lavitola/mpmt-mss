@@ -6,6 +6,8 @@ from pydantic.dataclasses import dataclass
 from typing import Literal, Optional
 import time
 
+log = logging.getLogger(__name__)
+
 @dataclass
 class ModbusConfig:
     mode: Literal["tcp", "rtu"]
@@ -72,6 +74,17 @@ class ModbusManager:
         def wrapper(self, *args, **kwargs):
             if not self.connected:
                 raise RuntimeError("Modbus not connected")
+            # self.connected is only ever set once, at __init__ - it does not
+            # reflect the client's real state. pymodbus itself closes the
+            # underlying serial connection after exhausting its retries on a
+            # failed transaction ("No response received... CLOSING
+            # CONNECTION"); without this check every call after that keeps
+            # going through this decorator, silently reusing a closed client
+            # forever, until the whole process is restarted.
+            if not self.client.is_socket_open():
+                log.warning("Modbus connection was closed, reconnecting...")
+                if not self.client.connect():
+                    raise RuntimeError("Modbus reconnect failed")
             return func(self, *args, **kwargs)
         return wrapper
 
