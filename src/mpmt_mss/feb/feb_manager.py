@@ -877,10 +877,12 @@ class FEBManager:
             self.modbus.close()
 
             self.disableAcqAll()
-            self.enableAcqChannel([channel])
             self.disableAllChannels()
+            time.sleep(2)
+            self.enableAcqChannel([channel])
+            time.sleep(1)
             self.enableChannel([channel])
-            time.sleep(4)   # settle time, matches reprogram_FEBs.py
+            time.sleep(3)
 
             try:
                 result = subprocess.run(
