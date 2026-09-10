@@ -1,4 +1,7 @@
 import inspect
+import logging
+import os
+import subprocess
 import threading
 import time
 import math
@@ -9,6 +12,8 @@ from mpmt_mss.feb.pmtchannel import PMTChannel
 from mpmt_mss.feb.ledchannel import LEDChannel
 from mpmt_mss.runcontrol.fpga import FPGA
 from mpmt_mss.rpc import rpc_service, rpc_method
+
+log = logging.getLogger(__name__)
 
 FEB_RPC_METHODS: list[str] = [
 
@@ -138,19 +143,39 @@ class FEBManager:
         return result
 
     def close(self):
+        self.pause_probe()
+
+    def pause_probe(self):
+        """Stops the background probe thread. Unlike close(), this is meant
+        to be resumed later with resume_probe() - used by flashFirmware() to
+        keep probe_task from fighting stm32flash for the shared UART.
+        """
         if not self._stop_event.is_set():
             self._stop_event.set()
 
             if self._thread.is_alive():
                 self._thread.join(timeout=5)
 
+    def resume_probe(self):
+        """Restarts the background probe thread after pause_probe(). A
+        Thread object can't be restarted once stopped, so this creates a
+        fresh one.
+        """
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self.probe_task)
+        self._thread.start()
+
     def probe_task(self):
         while True:
             for ch in self.getDefinedChannels():
-                self.channel(ch).device.probe()
+                try:
+                    self.channel(ch).device.probe()
+                except Exception:
+                    # unhandled here silently kills this thread for good - see clear()
+                    log.exception("probe_task: channel %s probe failed, skipping", ch)
                 if self._stop_event.is_set():
                     return
-                time.sleep(0.250) 
+                time.sleep(0.250)
 
     def channel(self, i: int) -> FEBChannel: 
         if i <= 0 or i>len(self._channels)-1:
@@ -159,6 +184,7 @@ class FEBManager:
         return self._channels[i]
 
     def clear(self):
+        # no lock against probe_task - it can catch a channel mid-detach
         for i in range(1, 20):
             self.channel(i).detach()
         self._led_rank = 0
@@ -394,25 +420,38 @@ class FEBManager:
         self.disableAllChannels()
         ok, failed = [], {}
 
+        log.info("alignModbusAddresses: starting on %d channel(s): %s", len(channels), channels)
         for ch in channels:
             dtype = DeviceType.PMT if (pmtmask & self._channelMask(ch)) else DeviceType.LED
             target = ch if dtype == DeviceType.PMT else ch + 20
+            log.info("alignModbusAddresses: channel %s (%s) -> address %s...", ch, dtype, target)
             success, err = self._alignChannel(ch, dtype, target, timeout, poll_interval)
             if success:
+                log.info("alignModbusAddresses: channel %s -> OK (address %s)", ch, target)
                 ok.append({"channel": ch, "type": dtype, "address": target})
             else:
+                log.warning("alignModbusAddresses: channel %s -> FAILED: %s", ch, err)
                 failed[str(ch)] = err
+        log.info(
+            "alignModbusAddresses: done - %d ok, %d failed%s",
+            len(ok), len(failed), f": {list(failed.keys())}" if failed else "",
+        )
 
         if reconfigure and ok:
-            # Full repopulation from register 103, not just the channels just
-            # aligned: _led_rank has to be recomputed for the whole board in
-            # ascending channel order to stay in sync with the FPGA's own
-            # per-LED-FEB slot numbering, and channels outside this call's
-            # scope must not lose their existing configuration.
-            self.clear()
-            self._configureFromFpga()
+            self.reconfigureFromFpga()
 
         return {"ok": ok, "failed": failed}
+
+    @rpc_method
+    def reconfigureFromFpga(self):
+        """Re-attaches every channel (1-19) from register 103's PMT/LED
+        wiring mask - pure software, no Modbus/hardware I/O. Separate from
+        alignModbusAddresses so it can be called once after aligning
+        channels individually, since _led_rank must be recomputed for the
+        whole board.
+        """
+        self.clear()
+        self._configureFromFpga()
 
     # ------------------------------------------------------------------
     # Global FEB methods
@@ -804,3 +843,63 @@ class FEBManager:
             (ready if status == 0 else notReady).append(ch)
 
         return {"ready": ready, "notReady": notReady}
+
+    # ------------------------------------------------------------------
+    # Firmware update
+    #
+    # The STM32L0 behind each channel is flashed over the same UART used
+    # for Modbus - there's no separate programming interface. So this has
+    # to: pause probe_task (it also uses that UART in the background),
+    # release the modbus connection, isolate+power only the target channel
+    # (same register 0/1 sequence mpmt-board-cli's reprogram_FEBs.py used),
+    # run stm32flash, then undo all of that - regardless of whether
+    # stm32flash succeeded. If the modbus connection isn't reopened and
+    # probe_task isn't resumed here, mss loses its hardware link entirely
+    # until the service is restarted, so the cleanup runs in `finally`.
+    # ------------------------------------------------------------------
+
+    @rpc_method
+    def flashFirmware(self, channel: int, firmware_path: str) -> str:
+        """Flash firmware onto one channel's STM32L0 via stm32flash.
+
+        Only one channel at a time: all 19 channels share the same UART, so
+        there's no way to flash two channels concurrently even in
+        principle. Every other channel is powered off for the duration.
+        """
+        self._validateChannel(channel)
+        if not os.path.isfile(firmware_path):
+            raise FileNotFoundError(f"firmware file not found: {firmware_path}")
+
+        serial_port = self.modbus.param.port
+
+        self.pause_probe()
+        try:
+            self.modbus.close()
+
+            self.disableAcqAll()
+            self.disableAllChannels()
+            time.sleep(2)
+            self.enableAcqChannel([channel])
+            time.sleep(1)
+            self.enableChannel([channel])
+            time.sleep(3)
+
+            try:
+                result = subprocess.run(
+                    ["stm32flash", "-b", "115200", "-w", firmware_path,
+                     "-e", "255", "-v", serial_port],
+                    capture_output=True, text=True, timeout=120,
+                )
+                output = result.stdout + result.stderr
+                if result.returncode != 0:
+                    return f"FAILED (exit {result.returncode}):\n{output}"
+                return f"OK:\n{output}"
+            except subprocess.TimeoutExpired as e:
+                return f"FAILED: stm32flash timed out after 120s:\n{(e.stdout or '') + (e.stderr or '')}"
+            except FileNotFoundError:
+                return "FAILED: stm32flash executable not found on PATH"
+        finally:
+            self.disableAcqAll()
+            self.disableAllChannels()
+            self.modbus.connect()
+            self.resume_probe()
