@@ -362,6 +362,33 @@ CALIBRATE_PMT_PARSER.add_argument(
     "-y", "--yes", action="store_true", help="skip the confirmation prompt"
 )
 
+ALIGN_PARSER = cmd2.Cmd2ArgumentParser(
+    description="Align Modbus addresses: power one board at a time and force it "
+                 "onto the address its FPGA wiring (register 103) expects. Same "
+                 "febmgr.alignModbusAddresses() RPC as always, just driven one "
+                 "channel per request from here instead of one big call for "
+                 "every channel - so you see OK/FAILED printed live as each "
+                 "channel finishes, instead of the whole shell blocking silently "
+                 "on a single request that can easily outlast any reasonable "
+                 "HTTP timeout."
+)
+ALIGN_PARSER.add_argument(
+    "--channels", type=int, nargs="+", default=None, metavar="CH",
+    help="channels to align (default: all 1..19)",
+)
+ALIGN_PARSER.add_argument(
+    "--align_timeout", type=float, default=5.0, metavar="SECONDS",
+    help="per-channel broadcast+readback retry budget, passed to "
+         "alignModbusAddresses (default: %(default)s)",
+)
+ALIGN_PARSER.add_argument(
+    "--poll_interval", type=float, default=0.25, metavar="SECONDS",
+    help="delay between retries within one channel (default: %(default)s)",
+)
+ALIGN_PARSER.add_argument(
+    "-y", "--yes", action="store_true", help="skip the confirmation prompt"
+)
+
 DEFAULT_PARSER = cmd2.Cmd2ArgumentParser(
     description="Set all the FPGA register to their default values."
 )
@@ -371,6 +398,22 @@ DEFAULT_PARSER.add_argument(
 
 FPGA_ADDRESS_PARSER = cmd2.Cmd2ArgumentParser()
 FPGA_ADDRESS_PARSER.add_argument('address', type=int, help='FPGA register address')
+
+FLASH_FIRMWARE_PARSER = cmd2.Cmd2ArgumentParser(
+    description="Flash firmware onto one channel's STM32L0 via stm32flash. "
+                 "Powers off every other channel for the duration (all 19 "
+                 "share the same UART) and takes roughly a minute."
+)
+FLASH_FIRMWARE_PARSER.add_argument('channel', type=int, help='channel to flash (1-19)')
+FLASH_FIRMWARE_PARSER.add_argument('firmware', help='path to the .hex firmware file, on the mss host')
+
+# Firmware flashing closes/reopens the modbus connection server-side and can
+# take ~30-90s (stm32flash itself, plus settle time) - long enough that the
+# CLI's normal client (fixed timeout from --timeout, default 10s) would time
+# out mid-flash. A second, longer-timeout client is created just for this
+# one call (see do_flash_firmware) rather than raising the default for
+# every other command.
+_FLASH_FIRMWARE_TIMEOUT_SEC = 180.0
 
 # PMT HV calibration (do_calibrate_pmt), ported from mpmt-board-cli's
 # HvShell.do_calibration (highvoltage/hv.py). Expected setpoints and sampling
@@ -798,6 +841,73 @@ class MSSShell(cmd2.Cmd):
         headers, table_rows = _dicts_to_table(rows)
         self.poutput(_format_table(headers, table_rows))
 
+    @cmd2.with_category("RPC commands")
+    @cmd2.with_argparser(ALIGN_PARSER)
+    def do_align(self, args: argparse.Namespace):
+        """Align Modbus addresses one channel at a time, printing OK/FAILED
+        live as each one finishes (see ALIGN_PARSER description above for
+        why this drives alignModbusAddresses() one channel per request
+        instead of a single call for the whole board).
+        """
+        channels = sorted(args.channels) if args.channels else list(range(1, 20))
+
+        if args.align_timeout >= self.timeout - 1:
+            self.perror(
+                f"Warning: --align_timeout {args.align_timeout}s leaves less than 1s of "
+                f"headroom under this shell's own HTTP timeout ({self.timeout}s) - a channel "
+                f"that genuinely needs the full retry budget could time out the HTTP request "
+                f"itself instead of coming back as a clean FAILED. Reconnect with a bigger "
+                f"--timeout (see 'help connect') or lower --align_timeout."
+            )
+
+        if not args.yes and not self._confirm(
+            f"Align {len(channels)} channel(s) ({', '.join(str(c) for c in channels)})? "
+            "Every other channel is powered off while each one's turn comes up, one at a time."
+        ):
+            self.poutput("Aborted.")
+            return
+
+        ok_channels, failed_channels = [], {}
+        for ch in channels:
+            self.poutput(f"channel {ch}: aligning...")
+            try:
+                result = self.client.febmgr.alignModbusAddresses(
+                    channels=[ch], timeout=args.align_timeout, poll_interval=args.poll_interval,
+                    reconfigure=False,
+                )
+            except mssclient.JsonRpcError as exc:
+                self.perror(f"  channel {ch}: RPC error [{exc.code}] {exc.message} {exc.data or ''}".strip())
+                failed_channels[str(ch)] = f"RPC error: {exc.message}"
+                continue
+            except mssclient.JsonRpcTransportError as exc:
+                self.perror(f"  channel {ch}: transport error: {exc}")
+                failed_channels[str(ch)] = f"transport error: {exc}"
+                continue
+
+            if result["ok"]:
+                entry = result["ok"][0]
+                self.poutput(f"  channel {ch} -> OK (address {entry['address']}, {entry['type']})")
+                ok_channels.append(ch)
+            else:
+                err = result["failed"].get(str(ch), "unknown error")
+                self.perror(f"  channel {ch} -> FAILED: {err}")
+                failed_channels[str(ch)] = err
+
+        if ok_channels:
+            self.poutput(f"Reconfiguring from register 103 ({len(ok_channels)} channel(s) aligned)...")
+            try:
+                self.client.febmgr.reconfigureFromFpga()
+            except (mssclient.JsonRpcError, mssclient.JsonRpcTransportError) as exc:
+                self.perror(f"reconfigureFromFpga failed: {exc}")
+
+        self.poutput("--- align summary ---")
+        rows = [{"channel": ch, "result": "OK"} for ch in ok_channels]
+        rows += [{"channel": int(ch), "result": f"FAILED: {err}"} for ch, err in failed_channels.items()]
+        rows.sort(key=lambda r: r["channel"])
+        headers, table_rows = _dicts_to_table(rows)
+        self.poutput(_format_table(headers, table_rows))
+        self._show_online()
+
     def _calibrate_pmt_channel(self, channel: int) -> tuple:
         """Runs the calibration ramp for one PMT channel and writes the
         fitted slope/offset. Returns (slope, offset). Raises
@@ -903,6 +1013,34 @@ class MSSShell(cmd2.Cmd):
             self.perror(f"Transport error: {exc}")
             return
         self.poutput(f"FPGA registers restored to default values.")
+
+    @cmd2.with_category("RPC commands")
+    @cmd2.with_argparser(FLASH_FIRMWARE_PARSER)
+    def do_flash_firmware(self, args: argparse.Namespace):
+        """Flash firmware onto one channel's STM32L0. No -y shortcut on
+        purpose - a wrong channel/firmware pair here can brick a board, so
+        every call gets an explicit confirmation.
+        """
+        if not self._confirm(
+            f"Flash '{args.firmware}' onto channel {args.channel}? Every other "
+            "channel will be powered off for the duration"
+        ):
+            self.poutput("Aborted.")
+            return
+
+        self.poutput(f"Flashing channel {args.channel} - this can take a minute or two...")
+        flash_client = mssclient.MSSClient(self.url, timeout=_FLASH_FIRMWARE_TIMEOUT_SEC)
+        try:
+            result = flash_client.febmgr.flashFirmware(args.channel, args.firmware)
+        except mssclient.JsonRpcError as exc:
+            self.perror(f"RPC error [{exc.code}] {exc.message} {exc.data or ''}".strip())
+            return
+        except mssclient.JsonRpcTransportError as exc:
+            self.perror(f"Transport error (still waited up to {_FLASH_FIRMWARE_TIMEOUT_SEC:.0f}s): {exc}")
+            return
+        finally:
+            flash_client.close()
+        self.poutput(result)
 
     @cmd2.with_category("RPC commands")
     def do_tr(self, _args):
