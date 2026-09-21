@@ -447,10 +447,17 @@ class FPGA:
     # ------------------------------------------------------------------
 
     @rpc_method
-    def startAcquisition(self, host: str, port: int = 5555) -> str:
-        """Start acquisition"""
+    def startAcquisition(self, host: str, identity: str, port: int = 5555) -> str:
+        """Start acquisition. `identity` becomes evproducer's --id, the ZMQ
+        DEALER identity mpmt-data-receiver's ROUTER socket uses to tell
+        senders apart -- required (not defaulted) so every caller has to
+        pick one explicitly instead of silently colliding with whatever
+        another board happens to be sending at the same time. mpmt-mss runs
+        one board at a time, so the identity to use (e.g. which tester
+        stand this board is on) is the caller's call, not this method's.
+        """
         command = ["/opt/mpmt-readout/build/evproducer", "--disable-rc",
-                   "--host", host, "--port", str(port)]
+                   "--host", host, "--port", str(port), "--id", identity]
         try:
             self.acqprocess = subprocess.Popen(command)
             return f'Process started with PID: {self.acqprocess.pid}'
